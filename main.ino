@@ -35,7 +35,7 @@ enum FlightState {
 // Set initial state to idle
 FlightState currentState = s_IDLE;
 
-// Aliases for sensors
+// Sensor Instances
 Adafruit_MPU6050 imu;
 Adafruit_BMP280 baro;
 
@@ -49,7 +49,7 @@ float groundAlt = 0.0;
 float currAlt = 0.0;
 float maxAlt = 0.0;
 float currZAccel = 0.0;
-float currZVelocity = 0.0;
+float currZVel = 0.0;
 float lastAlt = 0.0;
 unsigned long lastUpdateMs = 0;
 
@@ -105,7 +105,7 @@ void setup() {
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-
+  void unsigned currentMs = millis()
+  
 
 }
