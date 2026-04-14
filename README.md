@@ -26,5 +26,6 @@ The flight computer uses the onboard LED (PC13) to signal system health using a 
 *Note: Critical failures (IMU/Baro) will block the flight loop until resolved.*
 
 ## To-Do (depends on hardware)
-- [x] Buzzer / Flashing LEDs Code
+- [x] Flashing LEDs Blink Codes
+- [ ] Buzzer Code
 - [ ] External SD Card Logging
