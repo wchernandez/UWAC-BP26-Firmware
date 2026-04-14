@@ -1,5 +1,5 @@
 /*
-UWAC Beginner's Rocketry 2026
+  UWAC Beginner's Rocketry 2026 Firmware
 */
 
 // Standard Libraries
@@ -10,9 +10,6 @@ UWAC Beginner's Rocketry 2026
 #include <Adafruit_Sensor.h>
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_BMP280.h>
-
-// // Data Logging and Storage Libraries
-// #include <SdFat.h>
 
 // Pyro Channels
 #define CH1 PB8 // Drogue
@@ -33,14 +30,14 @@ enum FlightState {
 };
 
 // Set initial state to idle
-FlightState currentState = s_IDLE;
+FlightState currState = s_IDLE;
 
 // Sensor Instances
 Adafruit_MPU6050 imu;
 Adafruit_BMP280 baro;
 
 // Deployment & launch settings
-float launchThresh = 2; // 2 G-force
+float launchThresh = 2.0; // 2 G-force
 float mainDeployAlt = 300.0; // Deploy main chute at 300 metres (AGL)
 float firingDuration = 1000.0; // Firing duration at 1000 milliseconds
 
@@ -58,6 +55,27 @@ unsigned long drogueFireStartMs = 0;
 bool drogueFired = false;
 unsigned long mainFireStartMs = 0;
 bool mainFired = false;
+
+// Helper function
+void transitionTo(FlightState newState){
+  Serial.print("Transitioning to State: ");
+  Serial.println(newState);
+  currState = newState;
+}
+// Non-blocking function to fire pyros over specific length
+void firePyroLength(int pin, unsigned long &startTimeRef, bool &firedFlag) {
+  if (!firedFlag) {
+    if (startTimeRef == 0) {
+      startTimeRef = millis();
+      digitalWrite(pin, HIGH); // Ignite
+      Serial.print("FIRING PYRO ON PIN: "); Serial.println(pin);
+    } else if (millis() - startTimeRef > firingDuration) {
+      digitalWrite(pin, LOW); // Cut off
+      firedFlag = true;
+      Serial.print("PYRO FIRING COMPLETE ON PIN: "); Serial.println(pin);
+    }
+  }
+}
 
 void setup() {
   Serial.begin(115200);
@@ -105,7 +123,79 @@ void setup() {
 }
 
 void loop() {
-  void unsigned currentMs = millis()
-  
+  unsigned long currMs = millis();
+  float dt = (currMs - lastUpdateMs) / 1000.0; // Seconds elapsed
 
+  if (dt <= 0.0) return; // Waits until time elapses
+
+  lastUpdateMs = currMs;
+
+  // Reading sensors
+  sensors_event_t a, g, temp;
+  if(imu.getEvent(&a, &g, &temp)){
+    currZAccel = a.acceleration.z;
+  }
+
+  float rawAlt = baro.readAltitude(1013.25);
+  static float filteredAlt = -999.0;
+  if (filteredAlt == -999.0) filteredAlt = rawAlt; // Initialise on first loop
+
+  // EMA Filter to smooth out sensor noise spikes
+  filteredAlt = (filteredAlt * 0.85) + (rawAlt * 0.15);
+  currAlt = filteredAlt - groundAlt;
+  currZVel = (currAlt - lastAlt) / dt;
+  lastAlt = currAlt;
+
+  if (currAlt > maxAlt) {
+    maxAlt = currAlt;
+  }
+
+  // State machine logic
+  static unsigned long landedCheckMs = currMs; // For landing, debounce
+  
+  switch(currState) {
+    case s_IDLE:
+      if (abs(currZAccel) > launchThresh && currAlt > 2.0){
+        transitionTo(s_BOOST);
+      }
+      break;
+
+    case s_BOOST:
+      if (abs(currZAccel) < 5.0) { // Motor burnout
+        transitionTo(s_COAST);
+      }
+      break;
+
+    case s_COAST:
+      // Detect apogee when altitude drops 2m from maximum
+      if ((maxAlt - currAlt) > 2.0) { 
+        transitionTo(s_APOGEE);
+      }
+      break;
+
+    case s_APOGEE:
+      firePyroLength(CH1, drogueFireStartMs, drogueFired);
+      if (drogueFired) {
+        transitionTo(s_DESCENT);
+      }
+      break;
+
+    case s_DESCENT:
+      if (currAlt <= mainDeployAlt) {
+        firePyroLength(CH2, mainFireStartMs, mainFired);
+      }
+
+      // Checks for main chute fired, low velocity and near ground
+      if (mainFired && abs(currZVel) < 0.5 && currAlt < 15.0) {
+        if (currMs - landedCheckMs > 5000) {
+          transitionTo(s_LANDED);
+        }
+      } else {
+        landedCheckMs = currMs; 
+      }
+
+    case s_LANDED:
+      // Standby
+      break;
+  }
 }
