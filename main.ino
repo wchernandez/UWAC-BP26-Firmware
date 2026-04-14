@@ -18,6 +18,11 @@
 // Continuity Channels (Not Allocated)
 #define CH1_ADC 0 // Drogue
 #define CH2_ADC 0 // Main
+ 
+// Status LED
+#define LED_PIN PC13
+#define LED_ON LOW
+#define LED_OFF HIGH
 
 // Flight States
 enum FlightState {
@@ -37,9 +42,9 @@ Adafruit_MPU6050 imu;
 Adafruit_BMP280 baro;
 
 // Deployment & launch settings
-float launchThresh = 2.0; // 2 G-force
-float mainDeployAlt = 300.0; // Deploy main chute at 300 metres (AGL)
-float firingDuration = 1000.0; // Firing duration at 1000 milliseconds
+const float LAUNCH_THRESH = 2.0; // 2 G-force
+const float MAIN_DEPLOY_ALT = 300.0; // Deploy main chute at 300 metres (AGL)
+const float FIRING_DURATION = 1000.0; // Firing duration at 1000 milliseconds
 
 // Global tracking variables
 float groundAlt = 0.0;
@@ -56,6 +61,10 @@ bool drogueFired = false;
 unsigned long mainFireStartMs = 0;
 bool mainFired = false;
 
+// Diagnostic Tracking
+int diagCategory = 0;
+int diagCode = 0;
+
 // Helper function
 void transitionTo(FlightState newState){
   Serial.print("Transitioning to State: ");
@@ -69,12 +78,39 @@ void firePyroLength(int pin, unsigned long &startTimeRef, bool &firedFlag) {
       startTimeRef = millis();
       digitalWrite(pin, HIGH); // Ignite
       Serial.print("FIRING PYRO ON PIN: "); Serial.println(pin);
-    } else if (millis() - startTimeRef > firingDuration) {
+    } else if (millis() - startTimeRef > FIRING_DURATION) {
       digitalWrite(pin, LOW); // Cut off
       firedFlag = true;
       Serial.print("PYRO FIRING COMPLETE ON PIN: "); Serial.println(pin);
     }
   }
+}
+
+// LED blink code for diagnostics
+void blinkCode(int category, int code) {
+  // Clear LED state
+  digitalWrite(LED_PIN, LED_OFF);
+  delay(1000);
+
+  // Blink category (long blinks)
+  for (int i = 0; i < category; i++) {
+    digitalWrite(LED_PIN, LED_ON);
+    delay(500);
+    digitalWrite(LED_PIN, LED_OFF);
+    delay(500);
+  }
+
+  delay(1000); // Seperate category and code
+
+  // Blink code (short blinks)
+  for (int i = 0; i < code; i++) {
+    digitalWrite(LED_PIN, LED_ON);
+    delay(200);
+    digitalWrite(LED_PIN, LED_OFF);
+    delay(200);
+  }
+
+  delay(2000); // Separate next sequence
 }
 
 void setup() {
@@ -88,9 +124,17 @@ void setup() {
 
   Wire.begin();
 
+  // Initialise Status LED
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LED_OFF);
+
   // Initialise MPU6050 (IMU)
   if (!imu.begin()) {
     Serial.println("Cannot detect MPU6050.");
+    diagCategory = 2; diagCode = 1;
+    while (1) {
+      blinkCode(diagCategory, diagCode);
+    }
   } else {
     imu.setAccelerometerRange(MPU6050_RANGE_16_G);
   }
@@ -98,6 +142,10 @@ void setup() {
   // Initalise BMP280
   if (!baro.begin()) {
     Serial.println("Cannot detect BMP280.");
+    diagCategory = 3; diagCode = 1;
+    while (1) {
+      blinkCode(diagCategory, diagCode);
+    }
   } else {
     // Average ground pressure (1013.25Pa) at sea level over 1 second
     for (int i=0; i<10; i++) { 
@@ -112,11 +160,27 @@ void setup() {
   // ADC Channel Check
   pinMode(CH1_ADC, INPUT);
   pinMode(CH2_ADC, INPUT);
+  
   while (analogRead(CH1_ADC) < 100 || analogRead(CH2_ADC) < 100) {
-    if (analogRead(CH1_ADC) < 100) Serial.println("WARNING: CH1 (Drogue) Pyro disconnected!");
-    if (analogRead(CH2_ADC) < 100) Serial.println("WARNING: CH2 (Main) Pyro disconnected!");
-    delay(1000);
+    diagCategory = 4; // Category 4: Pyro
+
+    if (analogRead(CH1_ADC) < 100 && analogRead(CH2_ADC) < 100) {
+      Serial.println("WARNING: BOTH Pyros disconnected!");
+      diagCode = 3;
+    } else if (analogRead(CH1_ADC) < 100) {
+      Serial.println("WARNING: CH1 (Drogue) Pyro disconnected!");
+      diagCode = 1;
+    } else if (analogRead(CH2_ADC) < 100) {
+      Serial.println("WARNING: CH2 (Main) Pyro disconnected!");
+      diagCode = 2;
+    }
+
+    blinkCode(diagCategory, diagCode);
   }
+
+  // Signal Success
+  diagCategory = 1; diagCode = 1;
+  blinkCode(diagCategory, diagCode);
 
   Serial.println("Continuity checks passed. All pyros armed.");
   Serial.println("Flight Computer Initialised. State: IDLE");
@@ -155,7 +219,7 @@ void loop() {
   
   switch(currState) {
     case s_IDLE:
-      if (abs(currZAccel) > launchThresh && currAlt > 2.0){
+      if (abs(currZAccel) > LAUNCH_THRESH && currAlt > 2.0){
         transitionTo(s_BOOST);
       }
       break;
@@ -181,7 +245,7 @@ void loop() {
       break;
 
     case s_DESCENT:
-      if (currAlt <= mainDeployAlt) {
+      if (currAlt <= MAIN_DEPLOY_ALT) {
         firePyroLength(CH2, mainFireStartMs, mainFired);
       }
 
