@@ -24,7 +24,3 @@ The flight computer uses the onboard LED (PC13) to signal system health using a 
 | | | 3 | **Both**: Both pyro loops open. |
 
 *Note: Critical failures (IMU/Baro) will block the flight loop until resolved.*
-
-## To-Do (depends on hardware)
-- [x] Buzzer / Flashing LEDs Code
-- [ ] External SD Card Logging
