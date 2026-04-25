@@ -64,7 +64,7 @@ const float FAILSAFE_VELOCITY = -25.0; // Failsafe if falling > 25 m/s (drogue f
 float groundAlt = 0.0;
 float currAlt = 0.0;
 float maxAlt = 0.0;
-float currZAccel = 0.0;
+float currAccel = 0.0;
 float currZVel = 0.0;
 float lastAlt = 0.0;
 unsigned long lastUpdateMs = 0;
@@ -111,10 +111,9 @@ void blinkCode(int category, int code) {
   // Blink category (long blinks)
   for (int i = 0; i < category; i++) {
     digitalWrite(LED_PIN, LED_ON);
-    tone(BUZZ_PIN, BUZZ_FREQ);
+    tone(BUZZ_PIN, BUZZ_FREQ, 500);
     delay(500);
     digitalWrite(LED_PIN, LED_OFF);
-    noTone(BUZZ_PIN);
     delay(500);
   }
 
@@ -123,10 +122,9 @@ void blinkCode(int category, int code) {
   // Blink code (short blinks)
   for (int i = 0; i < code; i++) {
     digitalWrite(LED_PIN, LED_ON);
-    tone(BUZZ_PIN, BUZZ_FREQ);
+    tone(BUZZ_PIN, BUZZ_FREQ, 200);
     delay(200);
     digitalWrite(LED_PIN, LED_OFF);
-    noTone(BUZZ_PIN);
     delay(200);
   }
 
@@ -144,17 +142,15 @@ void blinkAltitude(int alt) {
 
     if (digit == 0) {
       digitalWrite(LED_PIN, LED_ON);
-      tone(BUZZ_PIN, BUZZ_FREQ);
+      tone(BUZZ_PIN, BUZZ_FREQ, 250);
       delay(1000); // Long flash for 0
       digitalWrite(LED_PIN, LED_OFF);
-      noTone(BUZZ_PIN);
     } else {
       for (int i = 0; i < digit; i++) {
         digitalWrite(LED_PIN, LED_ON);
-        tone(BUZZ_PIN, BUZZ_FREQ);
+        tone(BUZZ_PIN, BUZZ_FREQ, 250);
         delay(250);
         digitalWrite(LED_PIN, LED_OFF);
-        noTone(BUZZ_PIN);
         delay(250);
       }
     }
@@ -185,7 +181,6 @@ void setup() {
   // Simple startup tone
   tone(BUZZ_PIN, BUZZ_FREQ, 500); 
   delay(500);
-  noTone(BUZZ_PIN);
 
   // Initialise MPU6050 (IMU)
   if (!imu.begin()) {
@@ -199,7 +194,7 @@ void setup() {
   }
 
   // Initalise BMP280
-  if (!baro.begin()) {
+  if (!baro.begin(0x76)) {
     Serial.println("Cannot detect BMP280.");
     diagCategory = 3; diagCode = 1;
     while (1) {
@@ -261,13 +256,17 @@ void loop() {
   // Reading sensors
   sensors_event_t a, g, temp;
   if(imu.getEvent(&a, &g, &temp)){
-    currZAccel = a.acceleration.z;
+    currAccel = sqrt(a.acceleration.x * a.acceleration.x + a.acceleration.y * a.acceleration.y + a.acceleration.z * a.acceleration.z);
   }
 
+  static bool firstLoop = true;
+  
   float rawAlt = baro.readAltitude(1013.25);
   static float filteredAlt = -999.0;
-  if (filteredAlt == -999.0) filteredAlt = rawAlt; // Initialise on first loop
-
+  if (firstLoop) {
+    filteredAlt = rawAlt; // Initialise on first loop
+  }
+  
   // EMA Filter to smooth out sensor noise spikes
   filteredAlt = (filteredAlt * 0.85) + (rawAlt * 0.15);
   currAlt = filteredAlt - groundAlt;
@@ -275,7 +274,10 @@ void loop() {
   // Secondary EMA filter to prevent erroneous failsafe triggers.
   float rawZVel = (currAlt - lastAlt) / dt;
   static float filteredZVel = 0.0;
-  if (filteredAlt == rawAlt) filteredZVel = rawZVel; // Initialise to first velocity 
+  if (firstLoop) {
+    filteredZVel = rawZVel; // Initialise to first velocity 
+    firstLoop = false;
+  }
   filteredZVel = (filteredZVel * 0.80) + (rawZVel * 0.20);
   currZVel = filteredZVel;
 
@@ -291,14 +293,14 @@ void loop() {
   switch(currState) {
     case s_IDLE:
       // Check if acceleration in G's exceeds threshold while altitude is increasing
-      if (abs(currZAccel / GRAVITY_ACCEL) > LAUNCH_THRESH && currAlt > 2.0){
+      if ((currAccel / GRAVITY_ACCEL) > LAUNCH_THRESH && currAlt > 2.0){
         transitionTo(s_BOOST);
       }
       break;
 
     case s_BOOST:
       // Motor burnout: Accel drops significantly - adjusted to account for drag
-      if (abs(currZAccel) < 13.0) { 
+      if (currAccel < 13.0) { 
         transitionTo(s_COAST);
       }
       break;
@@ -306,8 +308,13 @@ void loop() {
     case s_COAST:
       // Detect apogee when altitude drops 2m from maximum (debounced to avoid false trigger)
       if ((maxAlt - currAlt) > 2.0) { 
-        if (apogeeDetectMs == 0) apogeeDetectMs = currMs;
-        else if (currMs - apogeeDetectMs >= 200) transitionTo(s_APOGEE);
+
+        // Check if debounce timer is zero, if it is, set it to current time. Otherwise check if debounce timer has been met
+        if (apogeeDetectMs == 0){
+          apogeeDetectMs = currMs;
+        } else if (currMs - apogeeDetectMs >= 200) {
+          transitionTo(s_APOGEE);
+        }
       } else {
         apogeeDetectMs = 0; // Reset debouncer if altitude fluctuates back up
       }
@@ -337,6 +344,10 @@ void loop() {
       break;
 
     case s_LANDED:
+      // Ensure pyros are turned off in case they were still firing during landing (safety)
+      digitalWrite(CH1, LOW);
+      digitalWrite(CH2, LOW);
+      
       // Play back the maximum altitude achieved
       blinkAltitude((int)maxAlt);
       break;
